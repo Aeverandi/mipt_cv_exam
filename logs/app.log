@@ -1,0 +1,63 @@
+2026-01-14 17:40:47 | INFO | ML | Кэшированные модели не найдены. Загружаем...
+2026-01-14 17:40:47 | INFO | ML | Начало загрузки моделей
+2026-01-14 17:40:47 | INFO | ML | accelerate доступен
+2026-01-14 17:40:47 | INFO | ML | YOLO модель загружена с models\YOLO\best.pt
+2026-01-14 17:40:47 | INFO | ML | Устройство для SD: CPU, тип данных: torch.float32
+2026-01-14 17:40:49 | INFO | ML | Применение оптимизаций для CPU
+2026-01-14 17:40:49 | WARNING | ML | CPU offload отключен: `enable_model_cpu_offload` requires accelerator, but not found
+2026-01-14 17:40:49 | INFO | ML | Stable Diffusion загружена на CPU
+2026-01-14 17:45:15 | INFO | ML | Кэшированные модели не найдены. Загружаем...
+2026-01-14 17:45:15 | INFO | ML | Начало загрузки моделей
+2026-01-14 17:45:15 | INFO | ML | accelerate доступен
+2026-01-14 17:45:15 | INFO | ML | YOLO модель загружена с models\YOLO\best.pt
+2026-01-14 17:45:15 | INFO | ML | Устройство для SD: CPU, тип данных: torch.float32
+2026-01-14 17:45:17 | INFO | ML | Применение оптимизаций для CPU
+2026-01-14 17:45:17 | WARNING | ML | CPU offload отключен: `enable_model_cpu_offload` requires accelerator, but not found
+2026-01-14 17:45:17 | INFO | ML | Stable Diffusion загружена на CPU
+2026-01-14 17:45:35 | INFO | ML | Запуск детекции: 01.jpg, тип: изображение
+2026-01-14 17:45:35 | ERROR | ML | Ошибка детекции 01.jpg: name 'io' is not defined
+2026-01-14 17:46:12 | INFO | ML | Запуск генерации для актёра: maria_sharapova
+2026-01-14 17:46:13 | INFO | ML | Эмбеддинг загружен: maria_sharapova
+2026-01-15 00:52:01 | INFO | ML | Кэшированные модели не найдены. Загружаем...
+2026-01-15 00:52:01 | INFO | ML | Начало загрузки моделей
+2026-01-15 00:52:01 | INFO | ML | accelerate доступен
+2026-01-15 00:52:02 | INFO | ML | YOLO модель загружена с models\YOLO\best.pt
+2026-01-15 00:52:02 | INFO | ML | Устройство для SD: CPU, тип данных: torch.float32
+2026-01-15 00:52:04 | INFO | ML | Применение оптимизаций для CPU
+2026-01-15 00:52:04 | WARNING | ML | CPU offload отключен: `enable_model_cpu_offload` requires accelerator, but not found
+2026-01-15 00:52:04 | INFO | ML | Stable Diffusion загружена на CPU
+2026-01-15 00:52:25 | INFO | ML | Запуск детекции: 02.jpg, тип: изображение
+2026-01-15 00:52:25 | INFO | ML | Детекция успешна: 02.jpg, обнаружены: Messi
+2026-01-15 00:52:25 | INFO | ДЕТЕКЦИЯ | Файл: 02.jpg | Обнаружены: Messi
+2026-01-15 00:53:50 | INFO | ML | Запуск детекции: 06.mp4, тип: видео
+2026-01-15 00:53:50 | INFO | ML | Детекция успешна: 06.mp4, обнаружены: Tom Hanks, Julia Roberts
+2026-01-15 00:53:50 | INFO | ДЕТЕКЦИЯ | Файл: 06.mp4 | Обнаружены: Tom Hanks, Julia Roberts
+2026-01-15 00:54:31 | INFO | ML | Запуск генерации для актёра: maria_sharapova
+2026-01-15 00:54:32 | INFO | ML | Эмбеддинг загружен: maria_sharapova
+2026-01-15 01:31:10 | INFO | ML | Кэшированные модели не найдены. Загружаем...
+2026-01-15 01:31:10 | INFO | ML | Начало загрузки моделей
+2026-01-15 01:31:10 | INFO | ML | accelerate доступен
+2026-01-15 01:31:10 | INFO | ML | YOLO модель загружена с models\YOLO\best.pt
+2026-01-15 01:31:10 | INFO | ML | Устройство для SD: CPU, тип данных: torch.float32
+2026-01-15 01:31:12 | INFO | ML | Применение оптимизаций для CPU
+2026-01-15 01:31:12 | WARNING | ML | CPU offload отключен: `enable_model_cpu_offload` requires accelerator, but not found
+2026-01-15 01:31:12 | INFO | ML | Stable Diffusion загружена на CPU
+2026-01-15 01:31:57 | INFO | ML | Запуск детекции: 05.jpg, тип: изображение
+2026-01-15 01:31:58 | INFO | ML | Детекция успешна: 05.jpg, обнаружены: Messi
+2026-01-15 01:31:58 | INFO | ДЕТЕКЦИЯ | Файл: 05.jpg | Обнаружены: Messi
+2026-01-15 01:32:17 | INFO | ML | Запуск детекции: 06.mp4, тип: видео
+2026-01-15 01:32:17 | ERROR | ML | Ошибка детекции 06.mp4: name 'status_text' is not defined
+2026-01-15 01:37:54 | INFO | ML | Запуск детекции: 06.mp4, тип: видео
+2026-01-15 01:37:54 | ERROR | ML | Ошибка детекции 06.mp4: name 'status_text' is not defined
+2026-01-15 01:56:02 | INFO | ML | Кэшированные модели не найдены. Загружаем...
+2026-01-15 01:56:02 | INFO | ML | Начало загрузки моделей
+2026-01-15 01:56:02 | INFO | ML | accelerate доступен
+2026-01-15 01:56:02 | INFO | ML | YOLO модель загружена с models\YOLO\best.pt
+2026-01-15 01:56:02 | INFO | ML | Устройство для SD: CPU, тип данных: torch.float32
+2026-01-15 01:56:03 | INFO | ML | Применение оптимизаций для CPU
+2026-01-15 01:56:03 | WARNING | ML | CPU offload отключен: `enable_model_cpu_offload` requires accelerator, but not found
+2026-01-15 01:56:03 | INFO | ML | Stable Diffusion загружена на CPU
+2026-01-15 01:56:21 | INFO | ДЕТЕКЦИЯ | Файл: 02.jpg | Обнаружены: Messi
+2026-01-15 01:57:03 | INFO | ДЕТЕКЦИЯ | Файл: 06.mp4 | Тип: видео | Обнаружены: Virat Kohli, Messi, Ronaldo
+2026-01-15 01:57:39 | INFO | ML | Запуск генерации для актёра: maria_sharapova
+2026-01-15 01:57:40 | INFO | ML | Эмбеддинг загружен: maria_sharapova
