@@ -3,13 +3,15 @@ import os
 from pathlib import Path
 import datetime
 import io
-from modules.logs import safe_logger
-from modules.ml import get_cached_models, detect_single_frame, generate_tab_internal, train_tab_internal
 import cv2
 import numpy as np
 import tempfile
 from PIL import Image
 import imageio
+
+# Извините, вычленил некоторые процессы - тяжело работалось с более чем 1000 строками кода уже...
+from modules.logs import safe_logger
+from modules.ml import get_cached_models, detect_single_frame, generate_tab_internal, detect_faces, prepare_yolo_dataset, train_yolo_model
 
 # Настройка страницы
 st.set_page_config(
@@ -19,7 +21,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# === КЭШИРОВАНИЕ МОДЕЛЕЙ ЧЕРЕЗ STREAMLIT ===
+# === КЭШИРОВАНИЕ МОДЕЛЕЙ ===
 @st.cache_resource
 def load_models_with_cache():
     """Функция-обертка для Streamlit кэширования"""
@@ -68,7 +70,7 @@ def main_page():
 def detection_page():
     logger = safe_logger
     st.header("🔍 Детекция актёров")
-    
+    st.write("Загрузите изображение (JPG, PNG, GIF) или видео (MP4, MOV, AVI) до 25 МБ и до 10 секунд.")
     uploaded_file = st.file_uploader("Выберите файл", type=["jpg", "jpeg", "png", "gif", "mp4", "mov", "avi"])
     
     if uploaded_file is not None:
@@ -240,7 +242,7 @@ def detection_page():
 def generation_page():
     logger = safe_logger
     st.header("🎨 Генерация изображений")
-    
+    st.write("Выберите актёра из списка, чтобы сгенерировать его изображение")
     if sd_model is None:
         st.error("❌ Stable Diffusion не загружена. Генерация недоступна.")
         return
@@ -357,63 +359,443 @@ def generation_page():
                     mime="text/plain"
                 )
 
-# === РЕЖИМ ДООБУЧЕНИЯ ===
+
+# === РЕЖИМ ДООБУЧЕНИЯ (ДВА ЭТАПА) ===
+# === РЕЖИМ ДООБУЧЕНИЯ (ДВА ЭТАПА) ===
 def training_page():
     logger = safe_logger
     st.header("🔄 Дообучение модели")
-    
-    uploaded_zip = st.file_uploader("Загрузите ZIP с фото", type="zip")
-    actor_name = st.text_input("Имя актёра (латиницей, например: tom_hanks)")
-    epochs = st.slider("Количество эпох", 1, 50, 10)
-    
-    if st.button("Начать дообучение", disabled=(not uploaded_zip or not actor_name)):
-        # === ПРОГРЕССБАРЫ - СОЗДАЕМ ДО ВЫЗОВА ML ===
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        result_container = st.container()
-        
-        try:
-            # Callback для прогресс-бара
-            def update_progress(value, text):
-                progress_bar.progress(min(value, 100))
-                status_text.text(text)
-            
-            result = train_tab_internal(
-                yolo_model=yolo_model,
-                zip_data=uploaded_zip.getvalue() if uploaded_zip else None,
-                actor_name=actor_name,
-                epochs=epochs,
-                progress_callback=update_progress
-            )
-            
-            if result["success"]:
-                st.success(f"✅ Модель дообучена на {result['images_processed']} изображениях")
-                st.metric("Итоговый mAP", f"{result['metrics']['mAP']:.3f}")
-                
-                # Логирование
-                log_entry = f"ДООБУЧЕНИЕ | Актёр: {actor_name} | Эпохи: {epochs} | mAP: {result['metrics']['mAP']:.3f}"
-                logger.info(log_entry)
-                st.success("✅ Результаты дообучения сохранены в лог")
-            else:
-                st.error(f"❌ Ошибка дообучения: {result['error']}")
-                logger.error(f"ДООБУЧЕНИЕ_ОШИБКА | Актёр: {actor_name} | Ошибка: {result['error']}")
-        
-        except Exception as e:
-            st.error(f"❌ Критическая ошибка дообучения: {str(e)}")
-            logger.error(f"ДООБУЧЕНИЕ_КРИТИЧЕСКАЯ_ОШИБКА | Актёр: {actor_name} | Ошибка: {str(e)}")
-    
+
+    # === ИНИЦИАЛИЗАЦИЯ СОСТОЯНИЙ ===
+    if "training_stage" not in st.session_state:
+        st.session_state.training_stage = "upload"  # upload, annotate, train
+
+    if "annotated_images" not in st.session_state:
+        st.session_state.annotated_images = []
+
+    if "accepted_images" not in st.session_state:
+        st.session_state.accepted_images = []
+
+    if "current_image_idx" not in st.session_state:
+        st.session_state.current_image_idx = 0
+
+    # === ЭТАП 1: ЗАГРУЗКА АРХИВА ===
+    if st.session_state.training_stage == "upload":
+        st.subheader("📁 Шаг 1: Загрузка данных")
+        st.write("Загрузите ZIP-архив с фотографиями одного человека для дообучения модели")
+
+        uploaded_zip = st.file_uploader("Загрузите ZIP с фото", type="zip", key="zip_uploader")
+        actor_name = st.text_input(
+            "Имя актёра (латиницей, например: ben_afflek)",
+            placeholder="ben_afflek",
+            key="actor_name_input"
+        )
+
+        # === ПРОВЕРКА ГОТОВНОСТИ ===
+        is_ready = uploaded_zip is not None and bool(actor_name.strip())
+
+        if st.button("🔍 Выполнить разметку", disabled=not is_ready, type="primary", use_container_width=True):
+            with st.spinner("🔄 Распаковка архива и детекция лиц..."):
+                try:
+                    if uploaded_zip is None:
+                        st.error("Файл не загружен")
+                        return
+
+                    if not actor_name.strip():
+                        st.error("Имя актёра не может быть пустым")
+                        return
+
+                    # Проверка размера файла (максимум 50 МБ для обучения)
+                    if uploaded_zip.size > 50 * 1024 * 1024:
+                        st.error(
+                            f"Файл слишком большой! Максимальный размер: 50 МБ. Ваш файл: {uploaded_zip.size / (1024 * 1024):.1f} МБ")
+                        logger.warning(
+                            f"ДООБУЧЕНИЕ | Отклонён большой файл: {uploaded_zip.name} ({uploaded_zip.size // 1024} КБ)")
+                        return
+
+                    # Создаем временную директорию
+                    with tempfile.TemporaryDirectory() as tmp_dir:
+                        # Сохраняем ZIP файл
+                        zip_path = os.path.join(tmp_dir, uploaded_zip.name)
+                        with open(zip_path, "wb") as f:
+                            f.write(uploaded_zip.getvalue())
+
+                        # Распаковка архива
+                        import zipfile
+                        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                            zip_ref.extractall(tmp_dir)
+
+                        # Поиск изображений
+                        image_files = []
+                        valid_extensions = {".jpg", ".jpeg", ".png"}
+                        for root, _, files in os.walk(tmp_dir):
+                            for f in files:
+                                if Path(f).suffix.lower() in valid_extensions:
+                                    image_files.append(os.path.join(root, f))
+
+                        if not image_files:
+                            st.error("В архиве не найдено изображений (JPG/PNG)!")
+                            logger.warning("ДООБУЧЕНИЕ | В архиве нет изображений")
+                            return
+
+                        st.info(f"📂 Найдено изображений: {len(image_files)}")
+
+                        # Загрузка изображений и детекция лиц
+                        annotated_images = []
+                        from PIL import Image
+                        import time
+
+                        progress_bar = st.progress(0)
+                        status_text = st.empty()
+
+                        for idx, img_path in enumerate(image_files):
+                            try:
+                                # Открываем изображение
+                                img = Image.open(img_path).convert("RGB")
+
+                                # Обновление прогресса
+                                progress = int((idx + 1) / len(image_files) * 100)
+                                progress_bar.progress(progress)
+                                status_text.text(f"Обработка изображения {idx + 1}/{len(image_files)}")
+
+                                # === ИСПОЛЬЗУЕМ УНИВЕРСАЛЬНУЮ ФУНКЦИЮ ДЕТЕКЦИИ ===
+                                start_time = time.time()
+                                faces = detect_faces(img)
+                                detection_time = time.time() - start_time
+
+                                logger.info(
+                                    f"ML | Детекция для {os.path.basename(img_path)}: {len(faces)} лиц, время: {detection_time:.2f}с")
+
+                                # Добавляем изображения с разметкой
+                                for face in faces:
+                                    bbox = face["box"]  # [x, y, width, height]
+
+                                    # Проверяем, что bbox в пределах изображения
+                                    img_width, img_height = img.size
+                                    x, y, w, h = bbox
+                                    if x < 0 or y < 0 or x + w > img_width or y + h > img_height:
+                                        continue
+
+                                    annotated_images.append({
+                                        "original_path": img_path,
+                                        "image": img.copy(),
+                                        "bbox": bbox,
+                                        "method_used": face.get("method", "unknown"),
+                                        "confidence": face.get("confidence", 1.0),
+                                        "accepted": True  # По умолчанию принимаем
+                                    })
+                            except Exception as e:
+                                logger.warning(f"Не удалось обработать изображение {img_path}: {str(e)}")
+                                continue
+
+                        if not annotated_images:
+                            st.error("Не удалось детектировать лица ни на одном изображении!")
+                            logger.error("ДООБУЧЕНИЕ | Не найдено лиц на изображениях")
+                            return
+
+                        # Фильтрация дубликатов (одно лицо на изображение)
+                        unique_images = {}
+                        for item in annotated_images:
+                            img_path = item["original_path"]
+                            if img_path not in unique_images:
+                                unique_images[img_path] = item
+                            else:
+                                # Оставляем лицо с максимальным confidence
+                                if item.get("confidence", 0) > unique_images[img_path].get("confidence", 0):
+                                    unique_images[img_path] = item
+
+                        annotated_images = list(unique_images.values())
+
+                        # Сохраняем в состояние
+                        st.session_state.annotated_images = annotated_images
+                        st.session_state.accepted_images = list(annotated_images)  # По умолчанию принимаем все
+                        st.session_state.actor_name = actor_name.strip()
+                        st.session_state.current_image_idx = 0
+                        st.session_state.training_stage = "annotate"
+
+                        # Статистика детекции
+                        methods_used = set(img["method_used"] for img in annotated_images)
+                        total_images = len(image_files)
+                        detected_images = len(annotated_images)
+                        detection_rate = detected_images / total_images * 100
+
+                        st.success(
+                            f"✅ Обнаружено лиц на {detected_images} из {total_images} изображений ({detection_rate:.1f}%)")
+                        st.info(f"ℹ️ Использован метод детекции: {', '.join(methods_used)}")
+
+                        # Автоматически переходим к проверке разметки
+                        time.sleep(1)
+                        st.rerun()  # ЗАМЕНА experimental_rerun НА rerun
+
+                except Exception as e:
+                    st.error(f"❌ Ошибка разметки: {str(e)}")
+                    logger.error(f"ДООБУЧЕНИЕ_ОШИБКА | Этап: разметка | Ошибка: {str(e)}")
+
+    # === ЭТАП 2: ПРОВЕРКА РАЗМЕТКИ ===
+    if st.session_state.training_stage == "annotate":
+        st.subheader("✅ Шаг 2: Проверка разметки")
+        st.write("Проверьте разметку на каждом изображении. Отклоните изображения с некорректной разметкой.")
+
+        if not st.session_state.annotated_images:
+            st.warning("Нет изображений для проверки. Вернитесь к первому шагу.")
+            if st.button("↩️ Вернуться к загрузке", use_container_width=True):
+                st.session_state.training_stage = "upload"
+                st.rerun()  # ЗАМЕНА experimental_rerun НА rerun
+            return
+
+        # Статистика
+        total_images = len(st.session_state.annotated_images)
+        accepted_count = sum(1 for img in st.session_state.annotated_images if img.get("accepted", False))
+
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Всего изображений", total_images)
+        col2.metric("Принято", accepted_count)
+        col3.metric("Процент принятых", f"{accepted_count / total_images * 100:.0f}%")
+
+        st.progress(accepted_count / total_images if total_images > 0 else 0)
+
+        # Навигация по изображениям
+        if total_images > 1:
+            col1, col2, col3 = st.columns([1, 2, 1])
+            with col1:
+                if st.button("⬅️ Предыдущее", disabled=(st.session_state.current_image_idx <= 0),
+                             use_container_width=True):
+                    st.session_state.current_image_idx = max(0, st.session_state.current_image_idx - 1)
+                    st.rerun()  # ЗАМЕНА experimental_rerun НА rerun
+            with col2:
+                st.markdown(f"### Изображение {st.session_state.current_image_idx + 1} из {total_images}")
+            with col3:
+                if st.button("Следующее ➡️", disabled=(st.session_state.current_image_idx >= total_images - 1),
+                             use_container_width=True):
+                    st.session_state.current_image_idx = min(total_images - 1, st.session_state.current_image_idx + 1)
+                    st.rerun()  # ЗАМЕНА experimental_rerun НА rerun
+
+        # Отображение текущего изображения с разметкой
+        current_item = st.session_state.annotated_images[st.session_state.current_image_idx]
+        img = current_item["image"].copy()
+        bbox = current_item["bbox"]
+
+        # Рисуем bbox на изображении
+        from PIL import ImageDraw
+        draw = ImageDraw.Draw(img)
+        x, y, w, h = bbox
+        draw.rectangle([x, y, x + w, y + h], outline="red", width=3)
+
+        # Добавляем подпись с информацией
+        confidence = current_item.get("confidence", 1.0)
+        method = current_item.get("method_used", "unknown")
+        draw.text((x, y - 25), f"Лицо ({method.upper()})", fill="red")
+        if method == "mtcnn_gpu":
+            draw.text((x, y - 10), f"Уверенность: {confidence:.2f}", fill="red")
+
+        # Отображение
+        st.image(img, caption=f"Разметка для: {st.session_state.actor_name}",
+                 width='content')  # ЗАМЕНА use_column_width НА width=None
+
+        # Кнопки принятия/отклонения с состоянием
+        current_accepted = current_item.get("accepted", True)
+
+        col1, col2 = st.columns(2)
+        with col1:
+            # ИСПРАВЛЕНО: кнопка активна, когда изображение НЕ принято
+            if st.button("✅ Принять разметку", type="primary", use_container_width=True, disabled=current_accepted):
+                current_item["accepted"] = True
+                st.success("Изображение принято для обучения")
+                st.rerun()  # ЗАМЕНА experimental_rerun НА rerun
+
+        with col2:
+            # ИСПРАВЛЕНО: кнопка активна, когда изображение принято
+            if st.button("❌ Отклонить разметку", use_container_width=True, disabled=not current_accepted):
+                current_item["accepted"] = False
+                st.warning("Изображение исключено из обучения")
+                st.rerun()  # ЗАМЕНА experimental_rerun НА rerun
+
+        # Отображение текущего статуса
+        status_emoji = "✅" if current_accepted else "❌"
+        status_text = "принято" if current_accepted else "отклонено"
+        st.markdown(f"### Статус изображения: {status_emoji} {status_text}")
+
+        # Сводка по всем изображениям
+        with st.expander("📊 Сводка по всем изображениям"):
+            accepted_images = [img for img in st.session_state.annotated_images if img.get("accepted", False)]
+            st.write(f"**Принято:** {len(accepted_images)} изображений")
+            st.write(f"**Отклонено:** {total_images - len(accepted_images)} изображений")
+
+            if accepted_images:
+                methods_count = {}
+                for img in accepted_images:
+                    method = img.get("method_used", "unknown")
+                    methods_count[method] = methods_count.get(method, 0) + 1
+
+                st.write("**Методы детекции:**")
+                for method, count in methods_count.items():
+                    st.write(f"- {method.upper()}: {count} изображений")
+
+        # Кнопки навигации
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("↩️ Вернуться к загрузке", use_container_width=True):
+                st.session_state.training_stage = "upload"
+                st.rerun()  # ЗАМЕНА experimental_rerun НА rerun
+        with col2:
+            min_images = 3
+            if st.button("🚀 Начать обучение", disabled=(accepted_count < min_images), use_container_width=True):
+                if accepted_count < min_images:
+                    st.warning(f"Для обучения требуется минимум {min_images} изображения с корректной разметкой!")
+                else:
+                    st.session_state.training_stage = "train"
+                    st.rerun()  # ЗАМЕНА experimental_rerun НА rerun
+
+    # === ЭТАП 3: ОБУЧЕНИЕ МОДЕЛИ ===
+    if st.session_state.training_stage == "train":
+        st.subheader("🚀 Шаг 3: Обучение модели")
+        st.write(f"Обучение модели на данных актёра: {st.session_state.actor_name}")
+
+        accepted_images = [img for img in st.session_state.annotated_images if img.get("accepted", False)]
+        accepted_count = len(accepted_images)
+
+        if accepted_count == 0:
+            st.error("Нет принятых изображений для обучения!")
+            if st.button("↩️ Вернуться к проверке разметки", use_container_width=True):
+                st.session_state.training_stage = "annotate"
+                st.rerun()  # ЗАМЕНА experimental_rerun НА rerun
+            return
+
+        st.info(f"✅ **Принято для обучения:** {accepted_count} изображений")
+
+        epochs = st.slider("Количество эпох обучения", min_value=5, max_value=100, value=20, key="epochs")
+        batch_size_options = [4, 8, 16, 32]
+        batch_size = st.selectbox("Размер батча", batch_size_options, index=1, key="batch_size")
+
+        st.caption("""
+        💡 **Рекомендации:**
+        - Для небольшого количества изображений (3-10) используйте 15-25 эпох
+        - Для большого количества изображений (>10) используйте 30-50 эпох
+        - Размер батча 8 оптимален для большинства GPU
+        """)
+
+        if st.button("🔥 Запустить обучение", type="primary", use_container_width=True):
+            # Прогресс-бар и статус
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            result_container = st.container()
+
+            try:
+                # Подготовка датасета
+                status_text.text("Подготовка датасета...")
+                progress_bar.progress(5)
+
+                # Создаем временную директорию для обучения
+                dataset_dir = Path.cwd() / "temp_training_data"
+                dataset_dir.mkdir(parents=True, exist_ok=True)
+
+                # Подготовка датасета в формате YOLO
+                images_dir, labels_dir, data_yaml_path = prepare_yolo_dataset(
+                    accepted_images,
+                    st.session_state.actor_name,
+                    base_dir=dataset_dir
+                )
+
+                status_text.text(f"Датасет подготовлен: {accepted_count} изображений")
+                progress_bar.progress(15)
+
+                # Callback для прогресса
+                def progress_callback(percent, text):
+                    progress_bar.progress(percent)
+                    status_text.text(text)
+
+                # Обучение модели
+                status_text.text("Начало обучения...")
+                training_result = train_yolo_model(
+                    data_yaml_path=data_yaml_path,
+                    epochs=epochs,
+                    batch_size=batch_size,
+                    progress_callback=progress_callback,
+                    status_callback=lambda text: status_text.text(text)
+                )
+
+                if training_result["success"]:
+                    progress_bar.progress(100)
+                    status_text.text("✅ Обучение завершено!")
+
+                    # Отображение результатов
+                    with result_container:
+                        st.success("🎉 Модель успешно дообучена!")
+
+                        # Метрики
+                        metrics = training_result["metrics"]
+                        col1, col2, col3, col4 = st.columns(4)
+
+                        with col1:
+                            st.metric("Precision", f"{metrics['precision']:.3f}")
+                            st.caption("Точность детекции")
+
+                        with col2:
+                            st.metric("Recall", f"{metrics['recall']:.3f}")
+                            st.caption("Полнота детекции")
+
+                        with col3:
+                            st.metric("mAP@0.5", f"{metrics['map50']:.3f}")
+                            st.caption("Средняя точность при IoU=0.5")
+
+                        with col4:
+                            st.metric("mAP@0.5-0.95", f"{metrics['map50_95']:.3f}")
+                            st.caption("Средняя точность при IoU=0.5-0.95")
+
+                        # График обучения
+                        results_path = metrics.get("results_path")
+                        if results_path and os.path.exists(results_path):
+                            st.subheader("📊 Графики обучения")
+                            st.image(results_path, caption="Результаты обучения YOLO",
+                                     width='content')  # ЗАМЕНА use_column_width НА width=None
+
+                        # Загрузка новой модели
+                        status_text.text("Загрузка новой модели...")
+                        from ultralytics import YOLO
+                        global yolo_model
+
+                        new_model_path = training_result["model_path"]
+                        try:
+                            yolo_model = YOLO(new_model_path)
+                            st.success("✅ Новая модель загружена и готова к использованию в детекции!")
+                        except Exception as e:
+                            logger.error(f"ДООБУЧЕНИЕ | Ошибка загрузки новой модели: {str(e)}")
+                            st.warning(
+                                "⚠️ Не удалось загрузить новую модель. Перезагрузите приложение для применения изменений.")
+
+                        # Логирование
+                        log_entry = (
+                            f"ДООБУЧЕНИЕ_УСПЕШНО | Актёр: {st.session_state.actor_name} | "
+                            f"Изображений: {accepted_count} | Эпохи: {epochs} | "
+                            f"Precision: {metrics['precision']:.3f} | Recall: {metrics['recall']:.3f} | "
+                            f"mAP@0.5: {metrics['map50']:.3f} | mAP@0.5-0.95: {metrics['map50_95']:.3f}"
+                        )
+                        logger.info(log_entry)
+
+
+                else:
+                    raise Exception(training_result["error"])
+
+            except Exception as e:
+                progress_bar.progress(0)
+                status_text.text("❌ Ошибка обучения!")
+                st.error(f"Ошибка обучения: {str(e)}")
+                logger.error(
+                    f"ДООБУЧЕНИЕ_ОШИБКА | Этап: обучение | Актёр: {st.session_state.actor_name} | Ошибка: {str(e)}")
+
     # === СПОЙЛЕР С ЛОГАМИ ===
     with st.expander("📄 Последние записи лога"):
         log_content = logger.read_last_lines(n=15)
-        st.text_area("Содержимое лога", log_content, height=300, key="training_log_display")
-        
+        st.text_area("Содержимое лога", log_content, height=300, key="training_log")
+
         if logger.get_log_info()['exists']:
             with open(logger.log_path, 'rb') as f:
                 st.download_button(
                     label="📥 Скачать полный лог",
                     data=f.read(),
                     file_name=f"training_log_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.log",
-                    mime="text/plain"
+                    mime="text/plain",
+                    use_container_width=True
                 )
 
 # === НАВИГАЦИЯ ===
