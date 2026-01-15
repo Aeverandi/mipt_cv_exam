@@ -818,5 +818,5 @@ elif mode == "🔄 Дообучение":
 # Отладочная информация (скрыта по умолчанию)
 with st.sidebar.expander("🔧 Отладка", expanded=False):
     st.caption(f"Текущая директория: {Path.cwd()}")
-    st.caption(f"YOLO модель: {'загружена' if yolo_model else 'не загружена'}")
-    st.caption(f"SD модель: {'загружена' if sd_model else 'не загружена'}")
+    st.caption(f"YOLO модель: {f'загружена ({yolo_model.ckpt_path})' if yolo_model else 'не загружена'}")
+    st.caption(f"SD модель: {f'загружена ({sd_model.config._name_or_path})' if sd_model else 'не загружена'}")
